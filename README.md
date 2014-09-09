@@ -10,9 +10,10 @@ Prerequisites
 **NOTE**: this repository **DOES NOT** contain everything needed to compile zram.
 
 You need:
-	- A working mer Platform SDK environment
-	- The Jolla kernel sources
-	- Lots of patience
+ - A working mer Platform SDK environment
+ - A working Jolla device
+ - The Jolla kernel sources
+ - Lots of patience
 
 Put a snapshot of the Jolla kernel (the __very__ same version you have on device) in the SOURCES/
 directory, using the notation sailfishos_kernel_jolla_msm8930-%{version}.tar.bz2.  
