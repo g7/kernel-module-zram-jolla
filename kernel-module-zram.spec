@@ -1,7 +1,7 @@
 Name:          kernel-module-zram-jolla
 Version:       3.4.91.20140612.1
 Summary:       zRAM for Jolla Kernel %{version}
-Release:       1
+Release:       2
 License:       GPLv2+
 Group:         System Environment/Kernel
 
@@ -63,4 +63,4 @@ make SUBDIRS=drivers/staging/zsmalloc modules_install INSTALL_MOD_PATH=%{buildro
 
 ### POST AND POSTUN (depmod)
 %post -p /sbin/depmod
-%postun -p /sbin/ldconfig
+%postun -p /sbin/depmod
