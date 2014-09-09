@@ -1,0 +1,60 @@
+From 0caea3f9f3094ad6cf9de42c7886c89c9090c776 Mon Sep 17 00:00:00 2001
+From: Seth Jennings <sjenning@linux.vnet.ibm.com>
+Date: Mon, 25 Jun 2012 11:14:36 -0500
+Subject: [PATCH] CHROMIUM: UPSTREAM: staging: zram/zcache: swtich Kconfig
+ dependency from X86 to ZSMALLOC
+
+upstream: commit 6e2361720b9da9ec830d407da058ca1827e62b12
+
+This patch switches zcache and zram dependency to ZSMALLOC
+rather than X86.  There is no net change since ZSMALLOC
+depends on X86, however, this prevent further changes to
+these files as zsmalloc dependencies change.
+
+Signed-off-by: Seth Jennings <sjenning@linux.vnet.ibm.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+BUG=chromium-os:36829
+TEST=compile, verify that zram module is updated and /boot/config is correct
+
+Change-Id: I91f6ed46549fe62a9fe3035063d98beb2f5d966a
+Signed-off-by: Luigi Semenzato <semenzato@chromium.org>
+Reviewed-on: https://gerrit.chromium.org/gerrit/39289
+Tested-by: Luigi Semenzato <semenzato@google.com>
+Reviewed-by: Sonny Rao <sonnyrao@chromium.org>
+Commit-Ready: Luigi Semenzato <semenzato@google.com>
+---
+ drivers/staging/zcache/Kconfig | 5 +----
+ drivers/staging/zram/Kconfig   | 5 +----
+ 2 files changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/staging/zcache/Kconfig b/drivers/staging/zcache/Kconfig
+index 7048e01..4881839 100644
+--- a/drivers/staging/zcache/Kconfig
++++ b/drivers/staging/zcache/Kconfig
+@@ -1,9 +1,6 @@
+ config ZCACHE
+ 	bool "Dynamic compression of swap pages and clean pagecache pages"
+-	# X86 dependency is because zsmalloc uses non-portable pte/tlb
+-	# functions
+-	depends on (CLEANCACHE || FRONTSWAP) && CRYPTO=y && X86
+-	select ZSMALLOC
++	depends on (CLEANCACHE || FRONTSWAP) && CRYPTO=y && ZSMALLOC=y
+ 	select CRYPTO_LZO
+ 	default n
+ 	help
+diff --git a/drivers/staging/zram/Kconfig b/drivers/staging/zram/Kconfig
+index 9d11a4c..be5abe8 100644
+--- a/drivers/staging/zram/Kconfig
++++ b/drivers/staging/zram/Kconfig
+@@ -1,9 +1,6 @@
+ config ZRAM
+ 	tristate "Compressed RAM block device support"
+-	# X86 dependency is because zsmalloc uses non-portable pte/tlb
+-	# functions
+-	depends on BLOCK && SYSFS && X86
+-	select ZSMALLOC
++	depends on BLOCK && SYSFS && ZSMALLOC
+ 	select LZO_COMPRESS
+ 	select LZO_DECOMPRESS
+ 	default n

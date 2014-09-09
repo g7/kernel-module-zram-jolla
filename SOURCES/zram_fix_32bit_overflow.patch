@@ -1,0 +1,71 @@
+From 2260c989d49febd23e57ad4f4954c786fff7657e Mon Sep 17 00:00:00 2001
+From: Luigi Semenzato <semenzato@chromium.org>
+Date: Mon, 5 Aug 2013 15:46:52 -0700
+Subject: [PATCH] CHROMIUM: zram: fix 32-bit overflow
+
+The 64-bit division operator is not available in 32-bit kernels,
+so have to use do_div.
+
+BUG=chromium:245703
+TEST=compiled
+
+Change-Id: I44ab763ea9e115cef6212f6524518cf7d9eac8c7
+Signed-off-by: Luigi Semenzato <semenzato@chromium.org>
+Reviewed-on: https://gerrit.chromium.org/gerrit/64695
+Reviewed-by: Doug Anderson <dianders@chromium.org>
+---
+ drivers/staging/zram/zram_drv.c | 17 ++++++++++-------
+ 1 file changed, 10 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/staging/zram/zram_drv.c b/drivers/staging/zram/zram_drv.c
+index 685d612..f3da7cc 100644
+--- a/drivers/staging/zram/zram_drv.c
++++ b/drivers/staging/zram/zram_drv.c
+@@ -104,29 +104,32 @@ static int page_zero_filled(void *ptr)
+ 	return 1;
+ }
+ 
+-static void zram_set_disksize(struct zram *zram, size_t totalram_bytes)
++static void zram_set_disksize(struct zram *zram)
+ {
++	u64 totalram_bytes = ((u64) totalram_pages) << PAGE_SHIFT;
++
+ 	if (!zram->disksize) {
++		u64 bytes = totalram_bytes;
+ 		pr_info(
+ 		"disk size not provided. You can use disksize_kb module "
+ 		"param to specify size.\nUsing default: (%u%% of RAM).\n",
+ 		default_disksize_perc_ram
+ 		);
+-		zram->disksize = default_disksize_perc_ram *
+-					(totalram_bytes / 100);
++		do_div(bytes, 100);
++		zram->disksize = default_disksize_perc_ram * bytes;
+ 	}
+ 
+-	if (zram->disksize > 2 * (totalram_bytes)) {
++	if (zram->disksize > 2 * totalram_bytes) {
+ 		pr_info(
+ 		"There is little point creating a zram of greater than "
+ 		"twice the size of memory since we expect a 2:1 compression "
+ 		"ratio. Note that zram uses about 0.1%% of the size of "
+ 		"the disk when not in use so a huge zram is "
+ 		"wasteful.\n"
+-		"\tMemory Size: %zu kB\n"
++		"\tMemory Size: %llu kB\n"
+ 		"\tSize you selected: %llu kB\n"
+ 		"Continuing anyway ...\n",
+-		totalram_bytes >> 10, zram->disksize
++		totalram_bytes >> 10, zram->disksize >> 10
+ 		);
+ 	}
+ 
+@@ -633,7 +636,7 @@ int zram_init_device(struct zram *zram)
+ 		return 0;
+ 	}
+ 
+-	zram_set_disksize(zram, totalram_pages << PAGE_SHIFT);
++	zram_set_disksize(zram);
+ 
+ 	zram->compress_workmem = kzalloc(LZO1X_MEM_COMPRESS, GFP_KERNEL);
+ 	if (!zram->compress_workmem) {

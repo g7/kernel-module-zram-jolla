@@ -1,0 +1,198 @@
+From 719f5d2b812963f5a33d1cef3afe01f465741a4f Mon Sep 17 00:00:00 2001
+From: Seth Jennings <sjenning@linux.vnet.ibm.com>
+Date: Mon, 2 Jul 2012 16:15:49 -0500
+Subject: [PATCH] CHROMIUM: UPSTREAM: staging: zsmalloc: remove x86 dependency
+
+This patch replaces the page table assisted object mapping
+method, which has x86 dependencies, with a arch-independent
+method that does a simple copy into a temporary per-cpu
+buffer.
+
+While a copy seems like it would be worse than mapping the pages,
+tests demonstrate the copying is always faster and, in the case of
+running inside a KVM guest, roughly 4x faster.
+
+Signed-off-by: Seth Jennings <sjenning@linux.vnet.ibm.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+BUG=chromium-os:36829
+TEST=extensive manual testing
+
+Change-Id: I8b41c92eb146c5cf0af40682802ba443f7810a0b
+Signed-off-by: Luigi Semenzato <semenzato@chromium.org>
+Reviewed-on: https://gerrit.chromium.org/gerrit/38999
+Reviewed-by: Olof Johansson <olofj@chromium.org>
+---
+ drivers/staging/zsmalloc/Kconfig         |  4 --
+ drivers/staging/zsmalloc/zsmalloc-main.c | 99 ++++++++++++++++++++++----------
+ drivers/staging/zsmalloc/zsmalloc_int.h  |  5 +-
+ 3 files changed, 72 insertions(+), 36 deletions(-)
+
+diff --git a/drivers/staging/zsmalloc/Kconfig b/drivers/staging/zsmalloc/Kconfig
+index a5ab720..9084565 100644
+--- a/drivers/staging/zsmalloc/Kconfig
++++ b/drivers/staging/zsmalloc/Kconfig
+@@ -1,9 +1,5 @@
+ config ZSMALLOC
+ 	tristate "Memory allocator for compressed pages"
+-	# X86 dependency is because of the use of __flush_tlb_one and set_pte
+-	# in zsmalloc-main.c.
+-	# TODO: convert these to portable functions
+-	depends on X86
+ 	default n
+ 	help
+ 	  zsmalloc is a slab-based memory allocator designed to store
+diff --git a/drivers/staging/zsmalloc/zsmalloc-main.c b/drivers/staging/zsmalloc/zsmalloc-main.c
+index 175b3c9..4cd0f04 100644
+--- a/drivers/staging/zsmalloc/zsmalloc-main.c
++++ b/drivers/staging/zsmalloc/zsmalloc-main.c
+@@ -425,6 +425,57 @@ static struct page *find_get_zspage(struct size_class *class)
+ 	return page;
+ }
+ 
++static void zs_copy_map_object(char *buf, struct page *firstpage,
++				int off, int size)
++{
++	struct page *pages[2];
++	int sizes[2];
++	void *addr;
++
++	pages[0] = firstpage;
++	pages[1] = get_next_page(firstpage);
++	BUG_ON(!pages[1]);
++
++	sizes[0] = PAGE_SIZE - off;
++	sizes[1] = size - sizes[0];
++
++	/* disable page faults to match kmap_atomic() return conditions */
++	pagefault_disable();
++
++	/* copy object to per-cpu buffer */
++	addr = kmap_atomic(pages[0]);
++	memcpy(buf, addr + off, sizes[0]);
++	kunmap_atomic(addr);
++	addr = kmap_atomic(pages[1]);
++	memcpy(buf + sizes[0], addr, sizes[1]);
++	kunmap_atomic(addr);
++}
++
++static void zs_copy_unmap_object(char *buf, struct page *firstpage,
++				int off, int size)
++{
++	struct page *pages[2];
++	int sizes[2];
++	void *addr;
++
++	pages[0] = firstpage;
++	pages[1] = get_next_page(firstpage);
++	BUG_ON(!pages[1]);
++
++	sizes[0] = PAGE_SIZE - off;
++	sizes[1] = size - sizes[0];
++
++	/* copy per-cpu buffer to object */
++	addr = kmap_atomic(pages[0]);
++	memcpy(addr + off, buf, sizes[0]);
++	kunmap_atomic(addr);
++	addr = kmap_atomic(pages[1]);
++	memcpy(addr, buf + sizes[0], sizes[1]);
++	kunmap_atomic(addr);
++
++	/* enable page faults to match kunmap_atomic() return conditions */
++	pagefault_enable();
++}
+ 
+ static int zs_cpu_notifier(struct notifier_block *nb, unsigned long action,
+ 				void *pcpu)
+@@ -435,18 +486,23 @@ static int zs_cpu_notifier(struct notifier_block *nb, unsigned long action,
+ 	switch (action) {
+ 	case CPU_UP_PREPARE:
+ 		area = &per_cpu(zs_map_area, cpu);
+-		if (area->vm)
+-			break;
+-		area->vm = alloc_vm_area(2 * PAGE_SIZE, area->vm_ptes);
+-		if (!area->vm)
+-			return notifier_from_errno(-ENOMEM);
++		/*
++		 * Make sure we don't leak memory if a cpu UP notification
++		 * and zs_init() race and both call zs_cpu_up() on the same cpu
++		 */
++		if (area->vm_buf)
++			return 0;
++		area->vm_buf = (char *)__get_free_page(GFP_KERNEL);
++		if (!area->vm_buf)
++			return -ENOMEM;
++		return 0;
+ 		break;
+ 	case CPU_DEAD:
+ 	case CPU_UP_CANCELED:
+ 		area = &per_cpu(zs_map_area, cpu);
+-		if (area->vm)
+-			free_vm_area(area->vm);
+-		area->vm = NULL;
++		if (area->vm_buf)
++			free_page((unsigned long)area->vm_buf);
++		area->vm_buf = NULL;
+ 		break;
+ 	}
+ 
+@@ -664,22 +720,11 @@ void *zs_map_object(struct zs_pool *pool, void *handle)
+ 	if (off + class->size <= PAGE_SIZE) {
+ 		/* this object is contained entirely within a page */
+ 		area->vm_addr = kmap_atomic(page);
+-	} else {
+-		/* this object spans two pages */
+-		struct page *nextp;
+-
+-		nextp = get_next_page(page);
+-		BUG_ON(!nextp);
+-
+-
+-		set_pte(area->vm_ptes[0], mk_pte(page, PAGE_KERNEL));
+-		set_pte(area->vm_ptes[1], mk_pte(nextp, PAGE_KERNEL));
+-
+-		/* We pre-allocated VM area so mapping can never fail */
+-		area->vm_addr = area->vm->addr;
++		return area->vm_addr + off;
+ 	}
+ 
+-	return area->vm_addr + off;
++	zs_copy_map_object(area->vm_buf, page, off, class->size);
++	return area->vm_buf;
+ }
+ EXPORT_SYMBOL_GPL(zs_map_object);
+ 
+@@ -701,14 +746,10 @@ void zs_unmap_object(struct zs_pool *pool, void *handle)
+ 	off = obj_idx_to_offset(page, obj_idx, class->size);
+ 
+ 	area = &__get_cpu_var(zs_map_area);
+-	if (off + class->size <= PAGE_SIZE) {
++	if (off + class->size <= PAGE_SIZE)
+ 		kunmap_atomic(area->vm_addr);
+-	} else {
+-		set_pte(area->vm_ptes[0], __pte(0));
+-		set_pte(area->vm_ptes[1], __pte(0));
+-		__flush_tlb_one((unsigned long)area->vm_addr);
+-		__flush_tlb_one((unsigned long)area->vm_addr + PAGE_SIZE);
+-	}
++	else
++		zs_copy_unmap_object(area->vm_buf, page, off, class->size);
+ 	put_cpu_var(zs_map_area);
+ }
+ EXPORT_SYMBOL_GPL(zs_unmap_object);
+diff --git a/drivers/staging/zsmalloc/zsmalloc_int.h b/drivers/staging/zsmalloc/zsmalloc_int.h
+index 92eefc6..a6f3109 100644
+--- a/drivers/staging/zsmalloc/zsmalloc_int.h
++++ b/drivers/staging/zsmalloc/zsmalloc_int.h
+@@ -110,9 +110,8 @@ enum fullness_group {
+ static const int fullness_threshold_frac = 4;
+ 
+ struct mapping_area {
+-	struct vm_struct *vm;
+-	pte_t *vm_ptes[2];
+-	char *vm_addr;
++	char *vm_buf; /* copy buffer for objects that span pages */
++	char *vm_addr; /* address of kmap_atomic()'ed pages */
+ };
+ 
+ struct size_class {

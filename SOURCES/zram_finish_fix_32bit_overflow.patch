@@ -1,0 +1,40 @@
+From 819b2bfe3c0a7f9d22615c00e067bf1d57aaa0ff Mon Sep 17 00:00:00 2001
+From: Luigi Semenzato <semenzato@chromium.org>
+Date: Tue, 13 Aug 2013 15:29:41 -0700
+Subject: [PATCH] CHROMIUM: zram: finish fixing 32-bit overflow
+
+Nasty bug.  PAGE_MASK is unsigned, so it extends to 64 bit with zeros.
+The first read in the zram block device is done by mkswap, which
+tries to read at the end of device.  zram_set_disksize is a side
+effect of the first read, so the disk size is now silently changed
+from 6GB to 2GB.  The read fails, but mkswap does not complain either:
+it finds the size of the device by trial and error and continues.
+Swapon detects the mismatch and fails.
+
+BUG=chromium:245703
+TEST=ran before and after change with various printks
+Signed-off-by: Luigi Semenzato <semenzato@chromium.org>
+
+Change-Id: I01750554964756c2759375df1f14d7bb8b859ccf
+Reviewed-on: https://gerrit.chromium.org/gerrit/65752
+Tested-by: Luigi Semenzato <semenzato@chromium.org>
+Reviewed-by: Mike Frysinger <vapier@chromium.org>
+Commit-Queue: Luigi Semenzato <semenzato@chromium.org>
+---
+ drivers/staging/zram/zram_drv.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/staging/zram/zram_drv.c b/drivers/staging/zram/zram_drv.c
+index f3da7cc..213e65a 100644
+--- a/drivers/staging/zram/zram_drv.c
++++ b/drivers/staging/zram/zram_drv.c
+@@ -133,7 +133,8 @@ static void zram_set_disksize(struct zram *zram)
+ 		);
+ 	}
+ 
+-	zram->disksize &= PAGE_MASK;
++	/* can't use PAGE_MASK because it does not extend correctly to 64 bit */
++	zram->disksize &= ~((1ULL << PAGE_SHIFT) - 1);
+ }
+ 
+ static void zram_free_page(struct zram *zram, size_t index)
