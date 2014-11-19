@@ -1,7 +1,7 @@
 Name:          kernel-module-zram-jolla
-Version:       3.4.91.20140612.1
+Version:       3.4.98.20140811.4
 Summary:       zRAM for Jolla Kernel %{version}
-Release:       2
+Release:       1
 License:       GPLv2+
 Group:         System Environment/Kernel
 
@@ -27,7 +27,14 @@ to configure the modules manually or use tools like zramcfg.
 
 ### PREP
 %prep
-%setup -q -c
+
+# Use this if you are using the tarball from the big source blob at
+# images.formeego.org
+%setup -q -n kernel-adaptation-sbj-%{version} 
+
+# Instead, use this if you are using a git snapshot
+#%setup -q -c
+
 %patch0 -p1
 %patch1 -p1
 %patch2 -p1
